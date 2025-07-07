@@ -1,51 +1,15 @@
 #include <boost/program_options.hpp>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/json_parser.hpp>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <vector>
 #include <chrono>
+#include "types.hpp"
+#include "kernel.hpp"
+#include "utils.hpp"
 
 namespace po = boost::program_options;
-namespace pt = boost::property_tree;
 
-using Vector=std::vector<double>;
-
-void readInputJSON(Vector& x, Vector& y, const std::string& inputJSON) {
-    // Read input JSON file
-    pt::ptree root;
-    pt::read_json(inputJSON, root);
-
-    // Extract x and y arrays into vectors
-    for (const auto& item : root.get_child("x")) {
-        x.push_back(item.second.get_value<double>());
-    }
-    
-    for (const auto& item : root.get_child("y")) {
-        y.push_back(item.second.get_value<double>());
-    }
-
-    std::cout << "Loaded vectors with size: " << x.size() << std::endl;
-}
-
-void writeOutputJSON(const Vector& result, const std::string& outputJSON) {
-    // Write result to output JSON file
-    pt::ptree root;
-    pt::ptree result_array;
-    
-    for (const auto& value : result) {
-        pt::ptree array_element;
-        array_element.put("", value);
-        result_array.push_back(std::make_pair("", array_element));
-    }
-    
-    root.add_child("result", result_array);
-    pt::write_json(outputJSON, root);
-    
-    std::cout << "Results written to: " << outputJSON << std::endl;
-}
-
-__host__
 void vectorAddHost(Vector& result, const Vector& x, const Vector& y) {
     if (x.size() != y.size()) {
         throw std::runtime_error("Vector sizes must be equal for addition");
@@ -99,12 +63,18 @@ int main(int argc, char* argv[]) {
         if (vm.count("sequential")) {
             vectorAddHost(result, x, y);
         } else if (vm.count("parallel")) {
-            std::cout << "  Mode: Parallel (GPU)" << std::endl;
+            vectorAddDevice(result, x, y);
         }
 
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        std::cout << "Vector addition completed in: " << duration.count() << " microseconds" << std::endl;
+        std::cout << "Vector addition completed in: " << duration.count() << " microseconds. " << std::endl;
+        std::cout << "Output sample: " << result.size() << std::endl;
+        for (size_t i = 0; i < std::min(result.size(), static_cast<size_t>(10)); ++i) {
+            ElementType value = result[i];
+            std::cout << "\t" << i << ": " << value << std::endl;
+        }
+        std::cout << "MD5 hash of result: " << computeMD5(result) << std::endl;
 
         // Write output data:
         writeOutputJSON(result, vm["output"].as<std::string>());
