@@ -3,5 +3,9 @@ bazel_dep(name = "rules_cuda", version = "0.2.5")
 bazel_dep(name = "boost.program_options", version = "1.87.0")
 bazel_dep(name = "boost.property_tree", version = "1.87.0")
 bazel_dep(name = "boost.uuid", version = "1.87.0")
+# Eigen
+# See its Bazel Central Registry at 
+# https://registry.bazel.build/modules/eigen
+bazel_dep(name = "eigen", version = "4.0.0-20241125.bcr.2")
 # OpenCV
 bazel_dep(name = "opencv", version = "4.11.0.bcr.2")
