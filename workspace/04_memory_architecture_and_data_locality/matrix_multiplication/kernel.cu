@@ -23,9 +23,9 @@ void naiveMatMulKernel(
     float* CDevice, const float* ADevice, const float* BDevice, 
     const int M, const int K, const int N
 ) {
-    const unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
-    const unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
-
+    const unsigned int row = blockIdx.x * blockDim.x + threadIdx.x;
+    const unsigned int col = blockIdx.y * blockDim.y + threadIdx.y;
+    
     // Skip threads that are out of bounds
     if (row >= M || col >= N) {
         return; 
@@ -53,10 +53,11 @@ void tiledMatMulKernel(
     __shared__ float As[TILE_SIZE][TILE_SIZE];
     __shared__ float Bs[TILE_SIZE][TILE_SIZE];
 
-    const int row = blockIdx.y * blockDim.y + threadIdx.y;
     const int col = blockIdx.x * blockDim.x + threadIdx.x;
-    const int tileRow = threadIdx.y;
+    const int row = blockIdx.y * blockDim.y + threadIdx.y;
+
     const int tileCol = threadIdx.x;
+    const int tileRow = threadIdx.y;
 
     float CValue{0.0f};
     for (int k = 0; k < static_cast<int>(std::ceil(static_cast<float>(K) / TILE_SIZE)); ++k) {
@@ -129,16 +130,19 @@ int64_t matrixMultiplicationDevice(Eigen::MatrixXf& C, const Eigen::MatrixXf& A,
     const int N = static_cast<int>(B.cols());
 
     dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-    dim3 gridDim(
-        (static_cast<unsigned int>(std::ceil(static_cast<float>(N) / blockDim.x))),
-        (static_cast<unsigned int>(std::ceil(static_cast<float>(M) / blockDim.y)))
-    );
-
     auto start = std::chrono::high_resolution_clock::now();
 
     if (useTiledKernel) {
+        dim3 gridDim(
+            (static_cast<unsigned int>(std::ceil(static_cast<float>(N) / blockDim.x))),
+            (static_cast<unsigned int>(std::ceil(static_cast<float>(M) / blockDim.y)))
+        );
         tiledMatMulKernel<<<gridDim, blockDim>>>(CDevice, ADevice, BDevice, M, K, N);
     } else {
+        dim3 gridDim(
+            (static_cast<unsigned int>(std::ceil(static_cast<float>(M) / blockDim.x))),
+            (static_cast<unsigned int>(std::ceil(static_cast<float>(N) / blockDim.y)))
+        );
         naiveMatMulKernel<<<gridDim, blockDim>>>(CDevice, ADevice, BDevice, M, K, N);
     }
 
