@@ -50,7 +50,7 @@ void naiveConvolutionKernel(
     }   
 
     // Do convolution
-    float pixel{0.0f};
+    float intensity{0.0f};
     for (int rowOffset{-FILTER_RADIUS}; rowOffset <= FILTER_RADIUS; ++rowOffset) {
         for (int colOffset{-FILTER_RADIUS}; colOffset <= FILTER_RADIUS; ++colOffset) {
             const int inputRow = static_cast<int>(outputRow) + rowOffset;
@@ -69,15 +69,65 @@ void naiveConvolutionKernel(
             const int filterCol = colOffset + FILTER_RADIUS;
             const unsigned int filterOffset = filterRow * FILTER_SIZE + filterCol;
 
-            pixel += static_cast<float>(inputImage[inputOffset]) * filterDevice[filterOffset];
+            intensity += static_cast<float>(inputImage[inputOffset]) * filterDevice[filterOffset];
         }
     }
 
     const unsigned int outputOffset = outputRow * width + outputCol;
-    outputImage[outputOffset] = static_cast<Byte>(std::fmaxf(0.0f, fminf(255.0f, pixel)));
+    outputImage[outputOffset] = static_cast<Byte>(std::fmaxf(0.0f, fminf(255.0f, intensity)));
 }
 
-int64_t convolutionDevice(cv::Mat& outputImage, const cv::Mat& inputImage, const cv::Mat& filter) {
+__global__
+void tiledConvolutionKernel(
+    Byte* outputImage, 
+    const Byte* inputImage, 
+    const int height, 
+    const int width
+) {
+    __shared__ Byte tile[INPUT_TILE_SIZE][INPUT_TILE_SIZE];
+
+    const int outputRow = blockIdx.y * OUTPUT_TILE_SIZE + threadIdx.y;
+    const int outputCol = blockIdx.x * OUTPUT_TILE_SIZE + threadIdx.x;
+    const int tileRow = threadIdx.y;
+    const int tileCol = threadIdx.x;
+
+    // Load input tile into shared memory
+    {
+        const int inputRow = outputRow - FILTER_RADIUS;
+        const int inputCol = outputCol - FILTER_RADIUS;
+        if (
+            (0 <= inputRow && inputRow < height) && 
+            (0 <= inputCol && inputCol < width)
+        ) {
+            tile[tileRow][tileCol] = inputImage[inputRow * width + inputCol];
+        } else {
+            tile[tileRow][tileCol] = 0;
+        }
+        __syncthreads();
+    }
+    
+    // Compute convolution
+    if (tileRow < FILTER_RADIUS || tileRow >= (OUTPUT_TILE_SIZE + FILTER_RADIUS) || 
+        tileCol < FILTER_RADIUS || tileCol >= (OUTPUT_TILE_SIZE + FILTER_RADIUS) || 
+        outputRow >= height || outputCol >= width) 
+    {
+        return;
+    }
+
+    float intensity{0.0f};
+    for (int filterRow = 0; filterRow < FILTER_SIZE; ++filterRow) {
+        for (int filterCol = 0; filterCol < FILTER_SIZE; ++filterCol) {
+            const int tileRowOffset = tileRow + filterRow - FILTER_RADIUS;
+            const int tileColOffset = tileCol + filterCol - FILTER_RADIUS;
+            const int filterOffset = filterRow * FILTER_SIZE + filterCol;
+            intensity += static_cast<float>(tile[tileRowOffset][tileColOffset]) * filterDevice[filterOffset];
+        }
+    }
+    const int outputOffset = outputRow * width + outputCol;
+    outputImage[outputOffset] = static_cast<Byte>(fmaxf(0.0f, fminf(255.0f, intensity)));
+}
+
+int64_t convolutionDevice(cv::Mat& outputImage, const cv::Mat& inputImage, const cv::Mat& filter, const bool useTiledKernel) {
     if (inputImage.empty()) {
         throw std::runtime_error("Input image is empty");
     }
@@ -103,6 +153,14 @@ int64_t convolutionDevice(cv::Mat& outputImage, const cv::Mat& inputImage, const
     auto start = std::chrono::high_resolution_clock::now();
 
     // Compute 2D grayscale image convolution using device kernel
+    if (useTiledKernel) {
+        dim3 blockDim(INPUT_TILE_SIZE, INPUT_TILE_SIZE);
+        dim3 gridDim(
+            (static_cast<unsigned int>(std::ceil(static_cast<float>(width) / OUTPUT_TILE_SIZE))),
+            (static_cast<unsigned int>(std::ceil(static_cast<float>(height) / OUTPUT_TILE_SIZE)))
+        );
+        tiledConvolutionKernel<<<gridDim, blockDim>>>(outputImageDevice, inputImageDevice, height, width);
+    } else
     {
         dim3 blockDim(INPUT_TILE_SIZE, INPUT_TILE_SIZE);
         dim3 gridDim(
